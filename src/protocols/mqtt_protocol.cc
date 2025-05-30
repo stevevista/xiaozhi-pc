@@ -5,6 +5,8 @@
 #include <esp_log.h>
 #include "application.h"
 
+#define TAG "MQTT"
+
 MqttProtocol::MqttProtocol() {
     //event_group_handle_ = xEventGroupCreate();
 }

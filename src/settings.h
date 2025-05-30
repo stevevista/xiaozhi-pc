@@ -2,9 +2,7 @@
 #define SETTINGS_H
 
 #include <string>
-#include <unordered_map>
-// #include <nvs_flash.h>
-using nvs_handle_t = std::unordered_map<std::string, std::string>*;
+#include <nvs_flash.h>
 
 class Settings {
 public:

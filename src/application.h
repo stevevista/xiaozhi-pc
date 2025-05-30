@@ -4,6 +4,7 @@
 #include "audio_processor.h"
 #include "opus_wrapper.h"
 #include "background_task.h"
+#include "ota.h"
 #include <functional>
 #include <list>
 #include <mutex>
@@ -22,7 +23,7 @@ public:
 
   ~Application();
   
-  void Start(bool force_update_ota);
+  void Start();
   void Schedule(std::function<void()> callback);
 
 private: 
@@ -31,10 +32,12 @@ private:
   bool Init();
   void EventLoop();
   void DeInit();
-  bool QueryOTAConfig(bool force_update_ota);
+  void CheckNewVersion();
 
   void AudioDisplay(bool input);
   void UpdateSampleDisplay(bool input, int16_t *samples, int size);
+
+  Ota ota_;
 
   SDL_Window *window_ = nullptr;
   SDL_Renderer *renderer_ = nullptr;

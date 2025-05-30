@@ -1,9 +1,9 @@
 #include "application.h"
 #include "settings.h"
-#include "sdl_audio_codec.h"
-#include "sdl_audio_processor.h"
+#include "impl/sdl_audio_codec.h"
+#include "impl/sdl_audio_processor.h"
 #include <cjson/cJSON.h>
-
+#include "board.h"
 #include "httplib.h"
 
 namespace {
@@ -56,7 +56,8 @@ bool Application::Init() {
   decoder_ = new OpusDecoderWrapper(SAMPLE_RATE, CHANNELS);
   encoder_ = new OpusEncoderWrapper(SAMPLE_RATE, CHANNELS);
 
-  codec_ = new SdlAudioCodec(nullptr, SAMPLE_RATE, SAMPLE_RATE);
+  // codec_ = new SdlAudioCodec(nullptr, SAMPLE_RATE, SAMPLE_RATE);
+  codec_ = Board::GetInstance().GetAudioCodec();
   audio_processor_ = new SdlAudioProcessor();
 
   audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
@@ -82,7 +83,8 @@ void Application::DeInit() {
   SDL_Log("Shutting down.");
 
   delete audio_processor_;
-  delete codec_;
+  //delete codec_;
+  delete Board::GetInstance().GetAudioCodec();
   delete decoder_;
   delete encoder_;
 
@@ -157,129 +159,19 @@ void Application::Schedule(std::function<void()> callback) {
   background_task_->Schedule(callback);
 }
 
-void Application::Start(bool force_update_ota) {
+void Application::Start() {
+  CheckNewVersion();
+
   if (!Init()) {
     return;
   }
-
-  if (!QueryOTAConfig(force_update_ota)) {
-    DeInit();
-    return;
-  }
-
-  //settings.SetString("endpoint", "mqtt.xiaozhi.me");
-  //settings.SetString("username", "xiaozhi");
-  //settings.SetString("password", "123456");
 
   EventLoop();
   DeInit();
 }
 
-bool Application::QueryOTAConfig(bool force_update_ota) {
-  Settings settings("mqtt", true);
-  if (!force_update_ota) {
-    if (!settings.GetString("endpoint").empty()) {
-      SDL_Log("Use local config.");
-      return true;
-    }
-  }
-
-  httplib::SSLClient cli(OTA_HOST);
-  cli.enable_server_certificate_verification(false);
-
-  httplib::Headers header = {
-    {"Device-Id", MAC_ADDR},
-    {"Content-Type", "application/json"},
-  };
-
-  std::string body = R"xxx({"flash_size": 16777216, "minimum_free_heap_size": 8318916, "mac_address": "c1:63:f4:3d:b4:ba", "chip_model_name": "esp32s3", "chip_info": {"model": 9, "cores": 2, "revision": 2, "features": 18}, "application": {"name": "xiaozhi", "version": "0.9.9", "compile_time": "Jan 22 2025T20:40:23Z", "idf_version": "v5.3.2-dirty", "elf_sha256": "22986216df095587c42f8aeb06b239781c68ad8df80321e260556da7fcf5f522"}, "partition_table": [{"label": "nvs", "type": 1, "subtype": 2, "address": 36864, "size": 16384}, {"label": "otadata", "type": 1, "subtype": 0, "address": 53248, "size": 8192}, {"label": "phy_init", "type": 1, "subtype": 1, "address": 61440, "size": 4096}, {"label": "model", "type": 1, "subtype": 130, "address": 65536, "size": 983040}, {"label": "storage", "type": 1, "subtype": 130, "address": 1048576, "size": 1048576}, {"label": "factory", "type": 0, "subtype": 0, "address": 2097152, "size": 4194304}, {"label": "ota_0", "type": 0, "subtype": 16, "address": 6291456, "size": 4194304}, {"label": "ota_1", "type": 0, "subtype": 17, "address": 10485760, "size": 4194304}], "ota": {"label": "factory"}, "board": {"type": "bread-compact-wifi", "ssid": "mzy", "rssi": -58, "channel": 6, "ip": "192.168.124.38", "mac": "cc:ba:97:20:b4:bc"}})xxx";
-
-  auto res = cli.Post(OTA_PATH, header, body.c_str(), body.size(), "application/json");
-  if (!res) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Query OTA failed");
-    return false;
-  }
-
-  std::cout << res->status << std::endl;
-  std::cout << res->body << std::endl;
-
-  /*
-  { 
-    "mqtt":{
-      "endpoint":"mqtt.xiaozhi.me",
-      "client_id":"GID_test@@@c1_63_f4_3d_b4_ba@@@",
-      "username":"eyJpcCI6IjU4LjM0LjIxNy4yMjIifQ==",
-      "password":"y9xIzfOZk38X/MAGZFNoUiLwjOUd9liWZJNrpnehzEk=",
-      "publish_topic":"device-server",
-      "subscribe_topic":"null"
-    },
-    "websocket":{"url":"wss://api.tenclass.net/xiaozhi/v1/","token":"test-token"},"server_time":{"timestamp":1748499162137,"timezone_offset":480},"firmware":{"version":"1.6.2","url":"https://xiaozhi-voice-assistant.oss-cn-shenzhen.aliyuncs.com/firmwares/v1.6.2_bread-compact-wifi/xiaozhi.bin"}}
-  */
-  cJSON* root = cJSON_Parse(res->body.c_str());
-  if (root == nullptr) {
-           //  ESP_LOGE(TAG, "Failed to parse json message %s", payload.c_str());
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to parse OTA body");
-    return false;
-  }
-
-  auto mqtt = cJSON_GetObjectItem(root, "mqtt");
-  if (mqtt == nullptr) {
-           //  ESP_LOGE(TAG, "Failed to parse json message %s", payload.c_str());
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "OTA body contains not mqtt config");
-    return false;
-  }
-
-  auto jendpoint = cJSON_GetObjectItem(mqtt, "endpoint");
-  if (jendpoint == nullptr) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "OTA body contains no endpoint");
-    return false;
-  }
-  std::string endpoint = jendpoint->valuestring;
-
-  auto jclient_id = cJSON_GetObjectItem(mqtt, "client_id");
-  if (jclient_id == nullptr) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "OTA body contains no client_id");
-    return false;
-  }
-  std::string client_id = jclient_id->valuestring;
-
-  auto jusername = cJSON_GetObjectItem(mqtt, "username");
-  if (jusername == nullptr) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "OTA body contains no username");
-    return false;
-  }
-  std::string username = jusername->valuestring;
-
-  auto jpassword = cJSON_GetObjectItem(mqtt, "password");
-  if (jpassword == nullptr) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "OTA body contains no password");
-    return false;
-  }
-  std::string password = jpassword->valuestring;
-
-  auto jpublish_topic = cJSON_GetObjectItem(mqtt, "publish_topic");
-  if (jpublish_topic == nullptr) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "OTA body contains no publish_topic");
-    return false;
-  }
-  std::string publish_topic = jpublish_topic->valuestring;
-
-  std::string subscribe_topic;
-  auto jsubscribe_topic = cJSON_GetObjectItem(mqtt, "subscribe_topic");
-  if (jsubscribe_topic) {
-    subscribe_topic = jsubscribe_topic->valuestring;
-  }
-
-  cJSON_Delete(root);
-
-  settings.SetString("endpoint", endpoint);
-  settings.SetString("client_id", client_id);
-  settings.SetString("username", username);
-  settings.SetString("password", password);
-  settings.SetString("publish_topic", publish_topic);
-  settings.SetString("subscribe_topic", subscribe_topic);
-
-  return true;
+void Application::CheckNewVersion() {
+  ota_.CheckVersion();
 }
 
 namespace {

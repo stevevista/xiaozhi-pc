@@ -1,114 +1,21 @@
 #include "settings.h"
 
 #include <esp_log.h>
-// #include <nvs_flash.h>
-
-#include <fstream>
-#include <iostream>
-#include <sstream>
+#include <nvs_flash.h>
 
 #define TAG "Settings"
 
-namespace simulate_nv {
-
-std::unordered_map<std::string, 
-            std::unordered_map<std::string, std::string>> nvs;
-
-std::unordered_map<std::string, std::string>* 
-getSection(const std::string& ns) {
-  auto it = nvs.find(ns);
-  if (it == nvs.end()) {
-    auto [it1, ret] = nvs.emplace(ns, std::unordered_map<std::string, std::string>());
-    return &it1->second;
-  } else {
-    return &it->second;
-  }
-}
-
-
-bool parseLine(const std::string& line, 
-               std::string& x, 
-               std::string& y, 
-               std::string& z) 
-{
-  std::istringstream iss(line);
-  std::string token;
-  std::vector<std::string> parts;
-
-  auto trim = [](std::string& s) {
-        s.erase(0, s.find_first_not_of(" \t"));
-        s.erase(s.find_last_not_of(" \t") + 1);
-  };
-
-  if (std::getline(iss, token, '.')) {
-    x = std::move(token);
-    trim(x);
-  } else {
-    return false;
-  }
-
-  if (std::getline(iss, token, '=')) {
-    y = std::move(token);
-    trim(y);
-  } else {
-    return false;
-  }
-
-  std::getline(iss, token, '\n');
-  z = std::move(token);
-  trim(z);
-
-  return true;
-}
-
-void initNvRam() {
-  static bool inited = false;
-  if (!inited) {
-    inited = true;
-
-    std::ifstream file(".xiaozhi_config");
-    if (!file.is_open()) {
-      std::cerr << "cannnot open .xiaozhi_config" << std::endl;
-      return;
-    }
-
-    std::string line;
-    while (std::getline(file, line)) {
-      if (line.empty() || line[0] == '#') continue;
-      std::string x, y, z;
-      if (parseLine(line, x, y, z)) {
-        auto sec = getSection(x);
-        (*sec)[y] = z;
-      }
-    }
-  }
-}
-
-void commitNvRam() {
-  std::ofstream file(".xiaozhi_config");
-  if (!file.is_open()) {
-    std::cerr << "cannnot open .xiaozhi_config" << std::endl;
-    return;
-  }
-
-  for (auto &[sec, submap] : nvs) {
-    for (auto &[key, value] : submap) {
-      file << sec << "." << key << "=" << value << std::endl;
-    }
-  }
-}
-
-} // namespace simulate_nv
-
 Settings::Settings(const std::string& ns, bool read_write) : ns_(ns), read_write_(read_write) {
-  simulate_nv::initNvRam();
-  nvs_handle_ = simulate_nv::getSection(ns);
+    nvs_open(ns.c_str(), read_write_ ? NVS_READWRITE : NVS_READONLY, &nvs_handle_);
 }
 
 Settings::~Settings() {
-  if (read_write_ && dirty_) {
-    simulate_nv::commitNvRam();
-  }
+    if (nvs_handle_ != 0) {
+        if (read_write_ && dirty_) {
+            ESP_ERROR_CHECK(nvs_commit(nvs_handle_));
+        }
+        nvs_close(nvs_handle_);
+    }
 }
 
 std::string Settings::GetString(const std::string& key, const std::string& default_value) {
@@ -116,17 +23,23 @@ std::string Settings::GetString(const std::string& key, const std::string& defau
         return default_value;
     }
 
-    auto it = nvs_handle_->find(key);
-    if (it == nvs_handle_->end()) {
+    size_t length = 0;
+    if (nvs_get_str(nvs_handle_, key.c_str(), nullptr, &length) != ESP_OK) {
         return default_value;
     }
 
-    return it->second;
+    std::string value;
+    value.resize(length);
+    ESP_ERROR_CHECK(nvs_get_str(nvs_handle_, key.c_str(), value.data(), &length));
+    while (!value.empty() && value.back() == '\0') {
+        value.pop_back();
+    }
+    return value;
 }
 
 void Settings::SetString(const std::string& key, const std::string& value) {
-    if (nvs_handle_ && read_write_) {
-        nvs_handle_->emplace(key, value);
+    if (read_write_) {
+        ESP_ERROR_CHECK(nvs_set_str(nvs_handle_, key.c_str(), value.c_str()));
         dirty_ = true;
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
@@ -138,17 +51,16 @@ int32_t Settings::GetInt(const std::string& key, int32_t default_value) {
         return default_value;
     }
 
-    auto it = nvs_handle_->find(key);
-    if (it == nvs_handle_->end()) {
+    int32_t value;
+    if (nvs_get_i32(nvs_handle_, key.c_str(), &value) != ESP_OK) {
         return default_value;
     }
-
-    return std::atoi(it->second.c_str());
+    return value;
 }
 
 void Settings::SetInt(const std::string& key, int32_t value) {
-    if (nvs_handle_ && read_write_) {
-        nvs_handle_->emplace(key, std::to_string(value));
+    if (read_write_) {
+        ESP_ERROR_CHECK(nvs_set_i32(nvs_handle_, key.c_str(), value));
         dirty_ = true;
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
@@ -156,16 +68,19 @@ void Settings::SetInt(const std::string& key, int32_t value) {
 }
 
 void Settings::EraseKey(const std::string& key) {
-    if (nvs_handle_ && read_write_) {
-        nvs_handle_->erase(key);
+    if (read_write_) {
+        auto ret = nvs_erase_key(nvs_handle_, key.c_str());
+        if (ret != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_ERROR_CHECK(ret);
+        }
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
     }
 }
 
 void Settings::EraseAll() {
-    if (nvs_handle_ && read_write_) {
-       nvs_handle_->clear();
+    if (read_write_) {
+        ESP_ERROR_CHECK(nvs_erase_all(nvs_handle_));
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
     }
