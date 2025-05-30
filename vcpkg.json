@@ -1,0 +1,22 @@
+{
+  "dependencies": [
+    "cjson",
+    {
+      "name": "cpp-httplib",
+      "features": [
+        "openssl"
+      ]
+    },
+    "fmt",
+    "mbedtls",
+    "openssl",
+    {
+      "name": "paho-mqttpp3",
+      "features": [
+        "ssl"
+      ]
+    },
+    "sdl3",
+    "opus"
+  ]
+}

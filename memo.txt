@@ -1,0 +1,6 @@
+# vcpkg config
+```sh
+vcpkg new --application
+vcpkg add port <package>
+cmake --preset=default
+```
