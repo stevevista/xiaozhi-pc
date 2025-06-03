@@ -16,6 +16,7 @@ public:
     void SetHeader(const std::string& key, const std::string& value);
     bool CheckVersion();
     esp_err_t Activate();
+    bool HasMqttConfig() { return has_mqtt_config_; }
 
     const std::string& GetCheckVersionUrl() const { return check_version_url_; }
 

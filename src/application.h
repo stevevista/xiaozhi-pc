@@ -4,12 +4,27 @@
 #include "audio_processor.h"
 #include "opus_wrapper.h"
 #include "background_task.h"
+#include "protocols/protocol.h"
 #include "ota.h"
 #include <functional>
 #include <list>
 #include <mutex>
 
+enum DeviceState {
+    kDeviceStateUnknown,
+    kDeviceStateStarting,
+    kDeviceStateWifiConfiguring,
+    kDeviceStateIdle,
+    kDeviceStateConnecting,
+    kDeviceStateListening,
+    kDeviceStateSpeaking,
+    kDeviceStateUpgrading,
+    kDeviceStateActivating,
+    kDeviceStateFatalError
+};
+
 #define OPUS_FRAME_DURATION_MS 60
+
 
 class Application {
 public:
@@ -25,6 +40,12 @@ public:
   
   void Start();
   void Schedule(std::function<void()> callback);
+  void SetDeviceState(DeviceState state);
+  void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
+  void DismissAlert();
+  void PlaySound(const std::string_view& sound);
+  void UpdateIotStates();
+  void ToggleChatState();
 
 private: 
   Application();
@@ -32,12 +53,35 @@ private:
   bool Init();
   void EventLoop();
   void DeInit();
+  void SetDecodeSampleRate(int sample_rate, int frame_duration);
   void CheckNewVersion();
+  void ShowActivationCode();
+  void ResetDecoder();
+  void OnClockTimer();
+  void AudioLoop();
+  void OnAudioInput();
+  void OnAudioOutput();
+  void AbortSpeaking(AbortReason reason);
+  void SetListeningMode(ListeningMode mode);
 
   void AudioDisplay(bool input);
   void UpdateSampleDisplay(bool input, int16_t *samples, int size);
 
   Ota ota_;
+  std::mutex mutex_;
+  std::atomic<uint32_t> last_output_timestamp_ = 0;
+  std::unique_ptr<Protocol> protocol_;
+  std::chrono::steady_clock::time_point last_output_time_;
+  std::list<AudioStreamPacket> audio_decode_queue_;
+  std::condition_variable audio_decode_cv_;
+  bool aborted_ = false;
+  volatile DeviceState device_state_ = kDeviceStateUnknown;
+  ListeningMode listening_mode_ = kListeningModeAutoStop;
+
+  std::list<uint32_t> timestamp_queue_;
+    std::mutex timestamp_mutex_;
+    bool busy_decoding_audio_ = false;
+    bool realtime_chat_enabled_ = false;
 
   SDL_Window *window_ = nullptr;
   SDL_Renderer *renderer_ = nullptr;

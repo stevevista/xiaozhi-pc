@@ -3,8 +3,14 @@
 #include "http_client.h"
 #include "paho_mqtt.h"
 #include "udp_client.h"
+#include "display/display.h"
 
 DECLARE_BOARD(FakeBoard)
+
+
+FakeBoard::FakeBoard() {
+  display_ = new NoDisplay();
+}
 
 AudioCodec* FakeBoard::GetAudioCodec() {
   static auto codec = new SdlAudioCodec(nullptr, 16000, 16000);
@@ -39,4 +45,8 @@ void FakeBoard::SetPowerSaveMode(bool enabled) {
   
 std::string FakeBoard::GetBoardJson() {
   return "";
+}
+
+Display* FakeBoard::GetDisplay() {
+    return display_;
 }

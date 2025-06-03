@@ -43,13 +43,12 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
   if (endpoint_.empty()) {
         ESP_LOGW(TAG, "MQTT endpoint is not specified");
         if (report_error) {
-            ///SetError(Lang::Strings::SERVER_NOT_FOUND);
+            SetError("SERVER_NOT_FOUND");
         }
         return false;
     }
 
-    //mqtt_ = Board::GetInstance().CreateMqtt();
-  mqtt_ = new PahoMqtt();
+  mqtt_ = Board::GetInstance().CreateMqtt();
   mqtt_->SetKeepAlive(90);
 
   mqtt_->OnDisconnected([this]() {
@@ -98,7 +97,7 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
     }
     if (!mqtt_->Connect(broker_address, broker_port, client_id_, username_, password_)) {
       ESP_LOGE(TAG, "Failed to connect to endpoint");
-      // SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+      SetError("SERVER_NOT_CONNECTED");
       return false;
     }
 
@@ -198,7 +197,7 @@ bool MqttProtocol::OpenAudioChannel() {
         return hello_responsed_;
       })) {
         ESP_LOGE(TAG, "Failed to receive server hello");
-        // SetError(Lang::Strings::SERVER_TIMEOUT);
+        SetError("SERVER_TIMEOUT");
         return false;
       }
     }
@@ -267,7 +266,7 @@ bool MqttProtocol::SendText(const std::string& text) {
     }
     if (!mqtt_->Publish(publish_topic_, text)) {
         ESP_LOGE(TAG, "Failed to publish message: %s", text.c_str());
-        //SetError(Lang::Strings::SERVER_ERROR);
+        SetError("SERVER_ERROR");
         return false;
     }
     return true;

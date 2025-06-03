@@ -23,6 +23,8 @@ add_executable(${PROJECT_NAME}
   protocols/mqtt_protocol.h
   interface/mqtt.h
   interface/udp.h
+  display/display.cc
+  display/display.h
   settings.cc
   settings.h
   application.cc
