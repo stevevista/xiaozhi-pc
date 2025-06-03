@@ -11,6 +11,14 @@ typedef void * nvs_handle_t;
 #define NVS_READWRITE 1
 #define NVS_READONLY 0
 
+inline int nvs_flash_init() {
+  return 0;
+}
+
+inline int nvs_flash_erase() {
+  return 0;
+}
+
 void nvs_open(const char *ns, int flags, nvs_handle_t *);
 int nvs_commit(nvs_handle_t);
 void nvs_close(nvs_handle_t);

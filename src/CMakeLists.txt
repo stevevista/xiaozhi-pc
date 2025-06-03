@@ -2,6 +2,13 @@
 PROJECT(xiaozhi-emu VERSION 1 LANGUAGES CXX)
 
 add_executable(${PROJECT_NAME} 
+  porting/entry.cc
+  porting/freertos/event_groups.cc
+  porting/freertos/event_groups.h
+  porting/freertos/task.cc
+  porting/freertos/task.h
+  porting/impl/ui_thread.cc
+  porting/impl/ui_thread.h
   porting/nvs_flash.cc
   porting/nvs_flash.h
   porting/impl/http_client.cc

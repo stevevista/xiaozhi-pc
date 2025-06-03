@@ -1,4 +1,5 @@
 #include "sdl_audio_codec.h"
+#include "ui_thread.h"
 
 SdlAudioCodec::~SdlAudioCodec() {
   if (stream_in) {
@@ -107,6 +108,7 @@ void SdlAudioCodec::EnableInput(bool enable) {
   }
 
   AudioCodec::EnableInput(enable);
+  UIThread::update_input_enable(enable);
 }
 
 void SdlAudioCodec::EnableOutput(bool enable) {
@@ -124,6 +126,7 @@ void SdlAudioCodec::EnableOutput(bool enable) {
   }
 
   AudioCodec::EnableOutput(enable);
+  UIThread::update_output_enable(enable);
 }
 
 int SdlAudioCodec::Read(int16_t* dest, int samples) {
@@ -133,6 +136,8 @@ int SdlAudioCodec::Read(int16_t* dest, int samples) {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to read from input audio stream: %s", SDL_GetError());
       return 0;
     }
+
+    UIThread::update_sample_display(true, dest, br / 2);
     return br / 2;
   }
   return 0;
@@ -140,6 +145,8 @@ int SdlAudioCodec::Read(int16_t* dest, int samples) {
 
 int SdlAudioCodec::Write(const int16_t* data, int samples) {
   if (output_enabled_ && stream_out) {
+    UIThread::update_sample_display(false, data, samples);
+
     if (!SDL_PutAudioStreamData(stream_out, data, samples * 2)) {
       return 0;
     }

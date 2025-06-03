@@ -6,7 +6,6 @@ project(xiaozhi-pc)
 
 set(CMAKE_CXX_STANDARD 17)
 
-
 find_package(fmt CONFIG REQUIRED)
 find_package(cJSON CONFIG REQUIRED)
 find_package(httplib CONFIG REQUIRED)
@@ -16,6 +15,3 @@ find_package(MbedTLS CONFIG REQUIRED)
 find_package(Opus CONFIG REQUIRED)
 
 add_subdirectory(src)
-
-set (FREERTOS_PORT MSVC_MINGW)
-add_subdirectory(FreeRTOSv202406.01-LTS/FreeRTOS-LTS/FreeRTOS/FreeRTOS-Kernel/examples/cmake_example)

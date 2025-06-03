@@ -11,7 +11,7 @@ OpusEncoderWrapper::~OpusEncoderWrapper() {
   }
 }
 
-OpusEncoderWrapper::OpusEncoderWrapper(int sample_rate, int channels)
+OpusEncoderWrapper::OpusEncoderWrapper(int sample_rate, int channels, int duration_ms)
 : channels_(channels) {
   int err;
   encoder = opus_encoder_create(sample_rate, channels, OPUS_APPLICATION_AUDIO, &err);
@@ -46,7 +46,7 @@ OpusDecoderWrapper::~OpusDecoderWrapper() {
     opus_decoder_destroy(decoder);
 }
 
-OpusDecoderWrapper::OpusDecoderWrapper(int sample_rate, int channels)
+OpusDecoderWrapper::OpusDecoderWrapper(int sample_rate, int channels, int duration_ms)
 : channels_(channels) {
   int err;
   /* Create a new decoder state. */

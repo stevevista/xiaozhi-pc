@@ -1,13 +1,12 @@
 #ifndef BACKGROUND_TASK_H
 #define BACKGROUND_TASK_H
 
-//#include <freertos/FreeRTOS.h>
-//#include <freertos/task.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <mutex>
 #include <list>
 #include <condition_variable>
 #include <atomic>
-#include <thread>
 #include <functional>
 
 class BackgroundTask {
@@ -22,12 +21,8 @@ private:
     std::mutex mutex_;
     std::list<std::function<void()>> main_tasks_;
     std::condition_variable condition_variable_;
-    //TaskHandle_t background_task_handle_ = nullptr;
-    std::thread thread_;
+    TaskHandle_t background_task_handle_ = nullptr;
     std::atomic<size_t> active_tasks_{0};
-
-    bool quit_{false};
-
 
     void BackgroundTaskLoop();
 };

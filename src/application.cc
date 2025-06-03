@@ -37,104 +37,38 @@ constexpr int HEIGHT = 240;
 constexpr int SAMPLE_RATE = 16000;
 constexpr int CHANNELS = 1;
 
-constexpr int AUDIO_OUT_BUF_SIZE = 960;
 
 } // namespace
 
 Application::Application() {
+  event_group_ = xEventGroupCreate();
   background_task_ = new BackgroundTask(4096 * 8);
+
+  audio_processor_ = std::make_unique<SdlAudioProcessor>();
 }
 
 Application::~Application() {
+    //if (clock_timer_handle_ != nullptr) {
+    //    esp_timer_stop(clock_timer_handle_);
+    //    esp_timer_delete(clock_timer_handle_);
+    //}
     if (background_task_ != nullptr) {
         delete background_task_;
     }
+    vEventGroupDelete(event_group_);
 }
 
 bool Application::Init() {
 
-  sample_array_in_.resize(SAMPLE_ARRAY_SIZE);
-  sample_array_out_.resize(SAMPLE_ARRAY_SIZE);
-  wwidth_ = WIDTH;
-  wheight_ = HEIGHT;
-
-  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't initialize SDL: %s", SDL_GetError());
-    return false;
-  }
-
-  if (!SDL_CreateWindowAndRenderer("xiaozhi", wwidth_, wheight_, 0, &window_, &renderer_)) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't create SDL window and renderer: %s", SDL_GetError());
-    return false;
-  }
-
-  SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
-  SDL_RenderClear(renderer_);
-  SDL_RenderPresent(renderer_);
-
-  decoder_ = new OpusDecoderWrapper(SAMPLE_RATE, CHANNELS);
-  encoder_ = new OpusEncoderWrapper(SAMPLE_RATE, CHANNELS);
-
   // codec_ = new SdlAudioCodec(nullptr, SAMPLE_RATE, SAMPLE_RATE);
   codec_ = Board::GetInstance().GetAudioCodec();
-  audio_processor_ = new SdlAudioProcessor();
-
-  audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
-    if (!protocol_ || protocol_->IsAudioChannelBusy()) {
-      return;
-    }
-
-    UpdateSampleDisplay(true, &data[0], data.size());
-    encoder_->Encode(std::move(data), [this] (std::vector<uint8_t>&& opus) {
-      AudioStreamPacket packet;
-      packet.payload = std::move(opus);
-      uint32_t last_output_timestamp_value = last_output_timestamp_.load();
-      {
-                    std::lock_guard<std::mutex> lock(timestamp_mutex_);
-                    if (!timestamp_queue_.empty()) {
-                        packet.timestamp = timestamp_queue_.front();
-                        timestamp_queue_.pop_front();
-                    } else {
-                        packet.timestamp = 0;
-                    }
-
-                    if (timestamp_queue_.size() > 3) { // 限制队列长度3
-                        timestamp_queue_.pop_front(); // 该包发送前先出队保持队列长度
-                        return;
-                    }
-      }
-
-      Schedule([this, last_output_timestamp_value, packet = std::move(packet)]() {
-                    protocol_->SendAudio(packet);
-                    // ESP_LOGI(TAG, "Send %zu bytes, timestamp %lu, last_ts %lu, qsize %zu",
-                    //     packet.payload.size(), packet.timestamp, last_output_timestamp_value, timestamp_queue_.size());
-                });
-
-      //std::vector<int16_t> pcm;
-      //if (decoder_->Decode(std::move(opus), pcm)) {
-      //  UpdateSampleDisplay(false, &pcm[0], pcm.size());
-      //  codec_->OutputData(pcm);
-      //}
-    });
-  });
-
-  audio_processor_->Initialize(codec_);
 
   return true;
 }
 
 void Application::DeInit() {
-  SDL_Log("Shutting down.");
-
-  delete audio_processor_;
   //delete codec_;
   delete Board::GetInstance().GetAudioCodec();
-  delete decoder_;
-  delete encoder_;
-
-  SDL_DestroyRenderer(renderer_);
-  SDL_DestroyWindow(window_);
-  SDL_Quit();
 }
 
 void Application::EventLoop() {
@@ -144,19 +78,7 @@ void Application::EventLoop() {
     while(SDL_PollEvent(&event) != 0) {
       if(event.type == SDL_EVENT_QUIT)
         running = false;
-      else if(event.type == SDL_EVENT_KEY_DOWN) {
-        if (event.key.key == SDLK_ESCAPE) {
-          running = false;
-        }
-        if (event.key.key == SDLK_T) {
-          ToggleChatState();
-        }
-        if (event.key.key == SDLK_A) {
-          Schedule([this]() {
-            AbortSpeaking(kAbortReasonNone);
-          });
-        }
-      } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+       else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
         if (event.button.button == 1) {
           // codec_->EnableOutput(false);
           codec_->EnableInput(true);
@@ -168,29 +90,17 @@ void Application::EventLoop() {
         }
       }
     }
-
-    AudioLoop();
-
-    if (codec_->input_enabled()) {
-      SDL_SetRenderDrawColor(renderer_, 0, 255, 0, 255);
-    } else {
-      SDL_SetRenderDrawColor(renderer_, 255, 0, 0, 255);
-    }
-    SDL_RenderClear(renderer_);
-
-    AudioDisplay(true);
-    AudioDisplay(false);
-
-    SDL_RenderPresent(renderer_);
   }
 }
 
-void Application::Schedule(std::function<void()> callback) {
-  background_task_->Schedule(callback);
+void Application::AbortSpeaking() {
+  Schedule([this]() {
+              AbortSpeaking(kAbortReasonNone);
+          });
 }
 
 void Application::Start() {
-  CheckNewVersion();
+  //CheckNewVersion();
 
   if (!Init()) {
     return;
@@ -198,6 +108,22 @@ void Application::Start() {
 
   auto& board = Board::GetInstance();
   SetDeviceState(kDeviceStateStarting);
+
+  /* Setup the display */
+  auto display = board.GetDisplay();
+
+  /* Setup the audio codec */
+  auto codec = board.GetAudioCodec();
+  opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
+  opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
+
+  codec->Start();
+
+  xTaskCreate([](void* arg) {
+        Application* app = (Application*)arg;
+        app->AudioLoop();
+        vTaskDelete(NULL);
+    }, "audio_loop", 4096 * 2, this, 8, &audio_loop_task_handle_);
 
   if (ota_.HasMqttConfig()) {
     protocol_ = std::make_unique<MqttProtocol>();
@@ -217,11 +143,11 @@ void Application::Start() {
             audio_decode_queue_.emplace_back(std::move(packet));
         }
   });
-  protocol_->OnAudioChannelOpened([this, &board]() {
+  protocol_->OnAudioChannelOpened([this, &board, codec]() {
         board.SetPowerSaveMode(false);
-        if (protocol_->server_sample_rate() != codec_->output_sample_rate()) {
+        if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
-                protocol_->server_sample_rate(), codec_->output_sample_rate());
+                protocol_->server_sample_rate(), codec->output_sample_rate());
         }
         SetDecodeSampleRate(protocol_->server_sample_rate(), protocol_->server_frame_duration());
         //auto& thing_manager = iot::ThingManager::GetInstance();
@@ -321,21 +247,176 @@ void Application::Start() {
     });
     bool protocol_started = protocol_->Start();
 
+  audio_processor_->Initialize(codec);
+  audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
+    background_task_->Schedule([this, data = std::move(data)]() mutable {
+      if (protocol_->IsAudioChannelBusy()) {
+        return;
+      }
+      opus_encoder_->Encode(std::move(data), [this](std::vector<uint8_t>&& opus) {
+        AudioStreamPacket packet;
+                packet.payload = std::move(opus);
+                uint32_t last_output_timestamp_value = last_output_timestamp_.load();
+                {
+                    std::lock_guard<std::mutex> lock(timestamp_mutex_);
+                    if (!timestamp_queue_.empty()) {
+                        packet.timestamp = timestamp_queue_.front();
+                        timestamp_queue_.pop_front();
+                    } else {
+                        packet.timestamp = 0;
+                    }
+
+                    if (timestamp_queue_.size() > 3) { // 限制队列长度3
+                        timestamp_queue_.pop_front(); // 该包发送前先出队保持队列长度
+                        return;
+                    }
+                }
+                Schedule([this, last_output_timestamp_value, packet = std::move(packet)]() {
+                    protocol_->SendAudio(packet);
+                    // ESP_LOGI(TAG, "Send %zu bytes, timestamp %lu, last_ts %lu, qsize %zu",
+                    //     packet.payload.size(), packet.timestamp, last_output_timestamp_value, timestamp_queue_.size());
+                });
+      });
+    });
+  });
+
   audio_processor_->Start();
 
   SetDeviceState(kDeviceStateIdle);
 
   if (protocol_started) {
-        //std::string message = std::string(Lang::Strings::VERSION) + ota_.GetCurrentVersion();
-        //display->ShowNotification(message.c_str());
-        //display->SetChatMessage("system", "");
+        std::string message = "version xxx";
+        display->ShowNotification(message.c_str());
+        display->SetChatMessage("system", "");
         // Play the success sound to indicate the device is ready
         ResetDecoder();
         PlaySound("P3_SUCCESS");
     }
 
-  EventLoop();
-  DeInit();
+  // Enter the main event loop
+  MainEventLoop();
+}
+
+// Add a async task to MainLoop
+void Application::Schedule(std::function<void()> callback) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        main_tasks_.push_back(std::move(callback));
+    }
+    xEventGroupSetBits(event_group_, SCHEDULE_EVENT);
+}
+
+// The Main Event Loop controls the chat state and websocket connection
+// If other tasks need to access the websocket or chat state,
+// they should use Schedule to call this function
+void Application::MainEventLoop() {
+    while (true) {
+        auto bits = xEventGroupWaitBits(event_group_, SCHEDULE_EVENT, pdTRUE, pdFALSE, portMAX_DELAY);
+
+        if (bits & SCHEDULE_EVENT) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            std::list<std::function<void()>> tasks = std::move(main_tasks_);
+            lock.unlock();
+            for (auto& task : tasks) {
+                task();
+            }
+        }
+    }
+}
+
+// The Audio Loop is used to input and output audio data
+void Application::AudioLoop() {
+    auto codec = Board::GetInstance().GetAudioCodec();
+    while (true) {
+        OnAudioInput();
+        if (codec->output_enabled()) {
+            OnAudioOutput();
+        }
+    }
+}
+
+void Application::OnAudioOutput() {
+    if (busy_decoding_audio_) {
+        return;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    auto codec = Board::GetInstance().GetAudioCodec();
+    const int max_silence_seconds = 10;
+
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (audio_decode_queue_.empty()) {
+        // Disable the output if there is no audio data for a long time
+        if (device_state_ == kDeviceStateIdle) {
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_output_time_).count();
+            if (duration > max_silence_seconds) {
+                codec->EnableOutput(false);
+            }
+        }
+        return;
+    }
+
+    if (device_state_ == kDeviceStateListening) {
+        audio_decode_queue_.clear();
+        audio_decode_cv_.notify_all();
+        return;
+    }
+
+    auto packet = std::move(audio_decode_queue_.front());
+    audio_decode_queue_.pop_front();
+    lock.unlock();
+    audio_decode_cv_.notify_all();
+
+    busy_decoding_audio_ = true;
+    background_task_->Schedule([this, codec, packet = std::move(packet)]() mutable {
+        busy_decoding_audio_ = false;
+        if (aborted_) {
+            return;
+        }
+
+        std::vector<int16_t> pcm;
+        if (!opus_decoder_->Decode(std::move(packet.payload), pcm)) {
+            return;
+        }
+        // Resample if the sample rate is different
+        //if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
+        //    int target_size = output_resampler_.GetOutputSamples(pcm.size());
+        //    std::vector<int16_t> resampled(target_size);
+        //    output_resampler_.Process(pcm.data(), pcm.size(), resampled.data());
+        //    pcm = std::move(resampled);
+        //}
+        codec->OutputData(pcm);
+        {
+            std::lock_guard<std::mutex> lock(timestamp_mutex_);
+            timestamp_queue_.push_back(packet.timestamp);
+            last_output_timestamp_ = packet.timestamp;
+        }
+        last_output_time_ = std::chrono::steady_clock::now();
+    });
+}
+
+void Application::OnAudioInput() {
+    if (audio_processor_->IsRunning()) {
+        std::vector<int16_t> data;
+        int samples = audio_processor_->GetFeedSize();
+        if (samples > 0) {
+            ReadAudio(data, 16000, samples);
+            audio_processor_->Feed(data);
+            return;
+        }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(30));
+}
+
+void Application::ReadAudio(std::vector<int16_t>& data, int sample_rate, int samples) {
+    auto codec = Board::GetInstance().GetAudioCodec();
+    {
+        data.resize(samples);
+        if (!codec->InputData(data)) {
+            return;
+        }
+    }
 }
 
 void Application::ShowActivationCode() {
@@ -435,97 +516,12 @@ void Application::SetDeviceState(DeviceState state) {
 
 void Application::ResetDecoder() {
     std::lock_guard<std::mutex> lock(mutex_);
-    // decoder_->ResetState();
+    opus_decoder_->ResetState();
     audio_decode_queue_.clear();
     audio_decode_cv_.notify_all();
     last_output_time_ = std::chrono::steady_clock::now();
-    codec_->EnableOutput(true);
-}
-
-// The Audio Loop is used to input and output audio data
-void Application::AudioLoop() {
-    OnAudioInput();
-    if (codec_->output_enabled()) {
-      OnAudioOutput();
-    }
-}
-
-void Application::OnAudioInput() {
-  for (;;) {
-        int samples = audio_processor_->GetFeedSize();
-        if (samples <= 0) {
-            break;
-        }
-
-        std::vector<int16_t> data(samples);
-        if (!codec_->InputData(data)) {
-          break;
-        }
-
-        audio_processor_->Feed(data);
-    }
-}
-
-void Application::OnAudioOutput() {
-    if (busy_decoding_audio_) {
-        return;
-    }
-
-    auto now = std::chrono::steady_clock::now();
     auto codec = Board::GetInstance().GetAudioCodec();
-    const int max_silence_seconds = 10;
-
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (audio_decode_queue_.empty()) {
-        // Disable the output if there is no audio data for a long time
-        if (device_state_ == kDeviceStateIdle) {
-            auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - last_output_time_).count();
-            if (duration > max_silence_seconds) {
-                codec->EnableOutput(false);
-            }
-        }
-        return;
-    }
-
-    if (device_state_ == kDeviceStateListening) {
-        audio_decode_queue_.clear();
-        audio_decode_cv_.notify_all();
-        return;
-    }
-
-    auto packet = std::move(audio_decode_queue_.front());
-    audio_decode_queue_.pop_front();
-    lock.unlock();
-    audio_decode_cv_.notify_all();
-
-    busy_decoding_audio_ = true;
-    background_task_->Schedule([this, codec, packet = std::move(packet)]() mutable {
-        busy_decoding_audio_ = false;
-        if (aborted_) {
-            return;
-        }
-
-        std::vector<int16_t> pcm;
-        if (!decoder_->Decode(std::move(packet.payload), pcm)) {
-            return;
-        }
-        UpdateSampleDisplay(false, &pcm[0], pcm.size());
-      
-        // Resample if the sample rate is different
-        //if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
-        //    int target_size = output_resampler_.GetOutputSamples(pcm.size());
-         //   std::vector<int16_t> resampled(target_size);
-         //   output_resampler_.Process(pcm.data(), pcm.size(), resampled.data());
-         //   pcm = std::move(resampled);
-       // }
-        codec->OutputData(pcm);
-        {
-            std::lock_guard<std::mutex> lock(timestamp_mutex_);
-            timestamp_queue_.push_back(packet.timestamp);
-            last_output_timestamp_ = packet.timestamp;
-        }
-        last_output_time_ = std::chrono::steady_clock::now();
-    });
+    codec->EnableOutput(true);
 }
 
 void Application::SetListeningMode(ListeningMode mode) {
@@ -584,113 +580,4 @@ void Application::PlaySound(const std::string_view& sound) {
 }
 
 void Application::UpdateIotStates() {
-}
-
-
-namespace {
-
-int compute_mod(int a, int b) {
-  return a < 0 ? a%b + b : a%b;
-}
-
-void fill_rectangle(SDL_Renderer *renderer, int x, int y, int w, int h) {
-  SDL_FRect rect;
-  rect.x = x;
-  rect.y = y;
-  rect.w = w;
-  rect.h = h;
-  if (w && h)
-    SDL_RenderFillRect(renderer, &rect);
-}
-
-} // namespace
-
-void Application::UpdateSampleDisplay(bool input, int16_t *samples, int size) {
-  std::vector<int16_t> *sample_array = input ? &sample_array_in_ : &sample_array_out_;
-
-  while (size > 0) {
-    int len = sample_array->size() - sample_array_index_;
-    if (len > size)
-      len = size;
-    memcpy(&((*sample_array)[0]) + sample_array_index_, samples, len * sizeof(int16_t));
-    samples += len;
-    sample_array_index_ += len;
-    if (sample_array_index_ >= sample_array->size())
-      sample_array_index_ = 0;
-    size -= len;
-  }
-}
-
-void Application::AudioDisplay(bool input) {
-  int i, i_start, x, y, y1, ys, delay, n, nb_display_channels;
-  int ch, channels, h, h2;
-
-  const int ytop = input ? (ytop_ + wheight_ / 2) : ytop_;
-  const int wheight = wheight_ / 2;
-  const std::vector<int16_t> *sample_array = input ? &sample_array_in_ : &sample_array_out_;
-
-  /* compute display index : center on currently output samples */
-  channels = CHANNELS;
-  nb_display_channels = channels;
-
-  if (codec_->output_enabled()) {
-    int data_used = WIDTH;
-    n = 2 * channels;
-    delay = AUDIO_OUT_BUF_SIZE;
-    delay /= n;
-
-    delay += 2 * data_used;
-    if (delay < data_used)
-      delay = data_used;
-
-    i_start = x = compute_mod(sample_array_index_ - delay * channels, sample_array->size());
-    h = INT_MIN;
-    for (i = 0; i < 1000; i += channels) {
-      int idx = (sample_array->size() + x - i) % sample_array->size();
-      int a = (*sample_array)[idx];
-      int b = (*sample_array)[(idx + 4 * channels) % sample_array->size()];
-      int c = (*sample_array)[(idx + 5 * channels) % sample_array->size()];
-      int d = (*sample_array)[(idx + 9 * channels) % sample_array->size()];
-      int score = a - d;
-      if (h < score && (b ^ c) < 0) {
-        h = score;
-        i_start = idx;
-      }
-    }
-  }
-
-  if (input)
-    SDL_SetRenderDrawColor(renderer_, 0, 0, 255, 255);
-  else
-    SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 255);
-
-  /* total height for one channel */
-  h = wheight / nb_display_channels;
-
-  /* graph height / 2 */
-  h2 = (h * 9) / 20;
-  for (ch = 0; ch < nb_display_channels; ch++) {
-    i = i_start + ch;
-    y1 = ytop + ch * h + (h / 2); /* position of center line */
-    for (x = 0; x < WIDTH; x++) {
-      y = ((*sample_array)[i] * h2) >> 15;
-      if (y < 0) {
-        y = -y;
-        ys = y1 - y;
-      } else {
-        ys = y1;
-      }
-      fill_rectangle(renderer_, xleft_ + x, ys, 1, y);
-      i += channels;
-      if (i >= sample_array->size())
-        i -= sample_array->size();
-    }
-  }
-
-  SDL_SetRenderDrawColor(renderer_, 0, 0, 255, 255);
-
-  for (ch = 1; ch < nb_display_channels; ch++) {
-    y = ytop + ch * h;
-    fill_rectangle(renderer_, xleft_, y, WIDTH, 1);
-  }
 }

@@ -1,4 +1,8 @@
 #pragma once
+#include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
+#include <freertos/task.h>
+#include <esp_timer.h>
 #include <SDL3/SDL.h>
 #include "audio_codec.h"
 #include "audio_processor.h"
@@ -9,6 +13,16 @@
 #include <functional>
 #include <list>
 #include <mutex>
+
+#if CONFIG_USE_WAKE_WORD_DETECT
+#include "wake_word_detect.h"
+#endif
+
+#define SCHEDULE_EVENT (1 << 0)
+#define AUDIO_INPUT_READY_EVENT (1 << 1)
+#define AUDIO_OUTPUT_READY_EVENT (1 << 2)
+#define CHECK_NEW_VERSION_DONE_EVENT (1 << 3)
+
 
 enum DeviceState {
     kDeviceStateUnknown,
@@ -46,6 +60,7 @@ public:
   void PlaySound(const std::string_view& sound);
   void UpdateIotStates();
   void ToggleChatState();
+  void AbortSpeaking();
 
 private: 
   Application();
@@ -67,10 +82,13 @@ private:
   void AudioDisplay(bool input);
   void UpdateSampleDisplay(bool input, int16_t *samples, int size);
 
+  std::unique_ptr<AudioProcessor> audio_processor_;
   Ota ota_;
   std::mutex mutex_;
+  std::list<std::function<void()>> main_tasks_;
   std::atomic<uint32_t> last_output_timestamp_ = 0;
   std::unique_ptr<Protocol> protocol_;
+  EventGroupHandle_t event_group_ = nullptr;
   std::chrono::steady_clock::time_point last_output_time_;
   std::list<AudioStreamPacket> audio_decode_queue_;
   std::condition_variable audio_decode_cv_;
@@ -83,25 +101,16 @@ private:
     bool busy_decoding_audio_ = false;
     bool realtime_chat_enabled_ = false;
 
-  SDL_Window *window_ = nullptr;
-  SDL_Renderer *renderer_ = nullptr;
-
   AudioCodec *codec_ = nullptr;
-  AudioProcessor *audio_processor_ = nullptr;
-  OpusDecoderWrapper *decoder_ = nullptr;
-  OpusEncoderWrapper *encoder_ = nullptr;
 
+  // Audio encode / decode
+  TaskHandle_t audio_loop_task_handle_ = nullptr;
   BackgroundTask* background_task_ = nullptr;
 
-  /* NOTE: the size must be big enough to compensate the hardware audio buffersize size */
-  /* TODO: We assume that a decoded and resampled frame fits into this buffer */
-  #define SAMPLE_ARRAY_SIZE (4 * 65536)
-  std::vector<int16_t> sample_array_in_;
-  std::vector<int16_t> sample_array_out_;
 
-  int sample_array_index_ = 0;
-  int xleft_ = 0;
-  int ytop_ = 0;
-  int wwidth_ = 0;
-  int wheight_ = 0;
+  std::unique_ptr<OpusEncoderWrapper> opus_encoder_;
+  std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
+
+  void MainEventLoop();
+  void ReadAudio(std::vector<int16_t>& data, int sample_rate, int samples);
 };
