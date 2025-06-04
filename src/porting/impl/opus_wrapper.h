@@ -25,7 +25,12 @@ public:
 
   void ResetState() {}
 
+  int duration_ms() const { return duration_ms_; }
+  int sample_rate() const { return sample_rate_; }
+
 private:
   OpusDecoder *decoder = nullptr;
+  const int sample_rate_;
   const int channels_;
+  const int duration_ms_;
 };

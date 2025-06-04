@@ -38,6 +38,11 @@ SdlAudioCodec::SdlAudioCodec(const char *devname, int input_sample_rate, int out
   SDL_AudioSpec outspec;
   SDL_AudioSpec inspec;
 
+  SDL_AudioSpec spec;
+  spec.format = SDL_AUDIO_S16;
+  spec.freq = input_sample_rate;
+  spec.channels = 1;
+
   SDL_Log("Opening default playback device...");
   SDL_AudioDeviceID device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
   if (!device) {
@@ -48,10 +53,7 @@ SdlAudioCodec::SdlAudioCodec(const char *devname, int input_sample_rate, int out
 
   SDL_PauseAudioDevice(device);
   SDL_GetAudioDeviceFormat(device, &outspec, NULL);
-  outspec.format = SDL_AUDIO_S16;
-  outspec.freq = output_sample_rate;
-  outspec.channels = 1;
-  stream_out = SDL_CreateAudioStream(&outspec, &outspec);
+  stream_out = SDL_CreateAudioStream(&spec, &outspec);
   if (!stream_out) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't create an audio stream for playback: %s!", SDL_GetError());
     SDL_free(devices);
@@ -76,10 +78,7 @@ SdlAudioCodec::SdlAudioCodec(const char *devname, int input_sample_rate, int out
   SDL_free(devices);
   SDL_PauseAudioDevice(device);
   SDL_GetAudioDeviceFormat(device, &inspec, NULL);
-  inspec.format = SDL_AUDIO_S16;
-  inspec.freq = input_sample_rate;
-  inspec.channels = 1;
-  stream_in = SDL_CreateAudioStream(&inspec, &inspec);
+  stream_in = SDL_CreateAudioStream(&inspec, &spec);
   if (!stream_in) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Couldn't create an audio stream for recording: %s!", SDL_GetError());
     return;
@@ -88,8 +87,8 @@ SdlAudioCodec::SdlAudioCodec(const char *devname, int input_sample_rate, int out
     return;
   }
 
-  input_channels_ = inspec.channels;
-  output_channels_ = outspec.channels;
+  input_channels_ = spec.channels;
+  output_channels_ = spec.channels;
   // SDL_SetAudioStreamFormat(stream_in, NULL, &outspec);  /* make sure we output at the playback format. */
 }
 
@@ -153,4 +152,21 @@ int SdlAudioCodec::Write(const int16_t* data, int samples) {
     return samples;
   }
   return 0;
+}
+
+void SdlAudioCodec::SetOutputFormat(int sample_rate, int channels) {
+  if (output_enabled_) {
+    SDL_PauseAudioStreamDevice(stream_out);
+    SDL_FlushAudioStream(stream_out);
+  }
+
+  SDL_AudioSpec spec;
+  spec.format = SDL_AUDIO_S16;
+  spec.freq = sample_rate;
+  spec.channels = channels;
+  SDL_SetAudioStreamFormat(stream_in, &spec, NULL);
+
+  if (output_enabled_) {
+    SDL_ResumeAudioStreamDevice(stream_out);
+  }
 }

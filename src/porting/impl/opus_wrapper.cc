@@ -47,7 +47,9 @@ OpusDecoderWrapper::~OpusDecoderWrapper() {
 }
 
 OpusDecoderWrapper::OpusDecoderWrapper(int sample_rate, int channels, int duration_ms)
-: channels_(channels) {
+: sample_rate_(sample_rate)
+, channels_(channels)
+, duration_ms_(duration_ms) {
   int err;
   /* Create a new decoder state. */
   decoder = opus_decoder_create(sample_rate, channels, &err);

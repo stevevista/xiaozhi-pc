@@ -47,6 +47,8 @@ bool UdpClient::Connect(const std::string& host, int port) {
     return false;
   }
 
+  int rc = connect(socket_, (struct sockaddr *)&server_addr_, sizeof(server_addr_));
+
   // Start receiver thread
   connected_ = true;
   receiver_thread_ = std::thread(&UdpClient::ReceiveLoop, this);
@@ -85,7 +87,7 @@ int UdpClient::Send(const std::string& data) {
 }
 
 void UdpClient::ReceiveLoop() {
-  char buffer[1024]; // Max UDP payload size
+  char buffer[4096]; // Max UDP payload size
         
   while (true) {
     sockaddr_in from_addr{};
@@ -99,12 +101,10 @@ void UdpClient::ReceiveLoop() {
       current_socket = socket_;
     }
 
-    int bytes = recvfrom(current_socket,
+    int bytes = recv(current_socket,
                                    buffer,
                                    sizeof(buffer),
-                                   0,
-                                   reinterpret_cast<sockaddr*>(&from_addr),
-                                   &from_len);
+                                   0);
 
     {
       std::lock_guard<std::mutex> lock(mutex_);

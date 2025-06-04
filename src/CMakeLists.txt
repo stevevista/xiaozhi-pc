@@ -11,6 +11,8 @@ add_executable(${PROJECT_NAME}
   porting/impl/ui_thread.h
   porting/nvs_flash.cc
   porting/nvs_flash.h
+  porting/impl/opus_wrapper.cc
+  porting/impl/opus_wrapper.h
   porting/impl/http_client.cc
   porting/impl/http_client.h
   porting/impl/paho_mqtt.cc
@@ -39,8 +41,6 @@ add_executable(${PROJECT_NAME}
   audio_codec.cc
   audio_codec.h
   audio_processor.h
-  opus_wrapper.cc
-  opus_wrapper.h
   background_task.cc
   background_task.h
   system_info.cc

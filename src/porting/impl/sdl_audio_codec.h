@@ -14,6 +14,8 @@ public:
   int Read(int16_t* dest, int samples) override;
   int Write(const int16_t* data, int samples) override;
 
+  void SetOutputFormat(int sample_rate, int channels);
+
 private:
   SDL_AudioStream *stream_in = nullptr;
   SDL_AudioStream *stream_out = nullptr;

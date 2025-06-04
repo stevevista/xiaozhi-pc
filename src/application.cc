@@ -58,6 +58,10 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
+void Application::CheckNewVersion() {
+  ota_.CheckVersion();
+}
+
 bool Application::Init() {
 
   // codec_ = new SdlAudioCodec(nullptr, SAMPLE_RATE, SAMPLE_RATE);
@@ -100,8 +104,6 @@ void Application::AbortSpeaking() {
 }
 
 void Application::Start() {
-  //CheckNewVersion();
-
   if (!Init()) {
     return;
   }
@@ -124,6 +126,12 @@ void Application::Start() {
         app->AudioLoop();
         vTaskDelete(NULL);
     }, "audio_loop", 4096 * 2, this, 8, &audio_loop_task_handle_);
+
+  // Check for new firmware version or get the MQTT broker address
+  CheckNewVersion();
+
+  // Initialize the protocol
+  display->SetStatus("LOADING_PROTOCOL");
 
   if (ota_.HasMqttConfig()) {
     protocol_ = std::make_unique<MqttProtocol>();
@@ -160,12 +168,12 @@ void Application::Start() {
   protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveMode(true);
         Schedule([this]() {
-            //auto display = Board::GetInstance().GetDisplay();
-            //display->SetChatMessage("system", "");
+            auto display = Board::GetInstance().GetDisplay();
+            display->SetChatMessage("system", "");
             SetDeviceState(kDeviceStateIdle);
         });
     });
-  protocol_->OnIncomingJson([this](const cJSON* root) {
+  protocol_->OnIncomingJson([this, display](const cJSON* root) {
         // Parse JSON data
         auto type = cJSON_GetObjectItem(root, "type");
         if (strcmp(type->valuestring, "tts") == 0) {
@@ -192,25 +200,25 @@ void Application::Start() {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (text != NULL) {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    //Schedule([this, display, message = std::string(text->valuestring)]() {
-                    //    display->SetChatMessage("assistant", message.c_str());
-                    //});
+                    Schedule([this, display, message = std::string(text->valuestring)]() {
+                        display->SetChatMessage("assistant", message.c_str());
+                    });
                 }
             }
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
             if (text != NULL) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
-                //Schedule([this, display, message = std::string(text->valuestring)]() {
-                //    display->SetChatMessage("user", message.c_str());
-                //});
+                Schedule([this, display, message = std::string(text->valuestring)]() {
+                    display->SetChatMessage("user", message.c_str());
+                });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (emotion != NULL) {
-                //Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
-                 //   display->SetEmotion(emotion_str.c_str());
-                //});
+                Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
+                    display->SetEmotion(emotion_str.c_str());
+                });
             }
         } else if (strcmp(type->valuestring, "iot") == 0) {
             auto commands = cJSON_GetObjectItem(root, "commands");
@@ -273,8 +281,8 @@ void Application::Start() {
                 }
                 Schedule([this, last_output_timestamp_value, packet = std::move(packet)]() {
                     protocol_->SendAudio(packet);
-                    // ESP_LOGI(TAG, "Send %zu bytes, timestamp %lu, last_ts %lu, qsize %zu",
-                    //     packet.payload.size(), packet.timestamp, last_output_timestamp_value, timestamp_queue_.size());
+                    ESP_LOGI(TAG, "Send %zu bytes, timestamp %lu, last_ts %lu, qsize %zu",
+                         packet.payload.size(), packet.timestamp, last_output_timestamp_value, timestamp_queue_.size());
                 });
       });
     });
@@ -524,6 +532,22 @@ void Application::ResetDecoder() {
     codec->EnableOutput(true);
 }
 
+void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {
+    if (opus_decoder_->sample_rate() == sample_rate && opus_decoder_->duration_ms() == frame_duration) {
+        return;
+    }
+
+    opus_decoder_.reset();
+    opus_decoder_ = std::make_unique<OpusDecoderWrapper>(sample_rate, 1, frame_duration);
+
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
+        ESP_LOGI(TAG, "Resampling audio from %d to %d", opus_decoder_->sample_rate(), codec->output_sample_rate());
+        static_cast<SdlAudioCodec*>(codec)->SetOutputFormat(opus_decoder_->sample_rate(), 1);
+        //output_resampler_.Configure(opus_decoder_->sample_rate(), codec->output_sample_rate());
+    }
+}
+
 void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;
     SetDeviceState(kDeviceStateListening);
@@ -567,13 +591,6 @@ void Application::AbortSpeaking(AbortReason reason) {
 }
 
 void Application::OnClockTimer() {
-}
-
-void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {
-}
-
-void Application::CheckNewVersion() {
-  ota_.CheckVersion();
 }
 
 void Application::PlaySound(const std::string_view& sound) {

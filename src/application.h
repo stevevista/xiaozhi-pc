@@ -6,7 +6,7 @@
 #include <SDL3/SDL.h>
 #include "audio_codec.h"
 #include "audio_processor.h"
-#include "opus_wrapper.h"
+#include "impl/opus_wrapper.h"
 #include "background_task.h"
 #include "protocols/protocol.h"
 #include "ota.h"
@@ -68,10 +68,10 @@ private:
   bool Init();
   void EventLoop();
   void DeInit();
-  void SetDecodeSampleRate(int sample_rate, int frame_duration);
-  void CheckNewVersion();
   void ShowActivationCode();
   void ResetDecoder();
+  void SetDecodeSampleRate(int sample_rate, int frame_duration);
+  void CheckNewVersion();
   void OnClockTimer();
   void AudioLoop();
   void OnAudioInput();
